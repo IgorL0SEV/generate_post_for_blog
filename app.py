@@ -1,38 +1,41 @@
-## УЛУЧШЕННЫЙ ВАРИАНТ кода для генерации новостей
+## ВАРИАНТ кода для генерации новостей с обновлённой библиотекой OpenAI
 
 import os
 from typing import Dict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import openai
 import requests
 from dotenv import load_dotenv
+from openai import OpenAI
 
-# Загружаем переменные окружения из .env файла (для локальной разработки)
+# Загружаем переменные окружения из .env файла для локальной разработки
 load_dotenv()
 
 app = FastAPI()
 
-# Получаем ключи API из переменных окружения
+# Получаем API-ключи из переменных окружения
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CURRENTS_API_KEY = os.getenv("CURRENTS_API_KEY")
 
-# Проверяем, что ключи существуют, иначе не запускаем сервис
+# Проверяем наличие ключей, иначе останавливаем приложение
 if not OPENAI_API_KEY or not CURRENTS_API_KEY:
     raise RuntimeError(
         "Необходимо указать переменные окружения OPENAI_API_KEY и CURRENTS_API_KEY"
     )
 
-openai.api_key = OPENAI_API_KEY
+# Инициализация клиента OpenAI
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 class Topic(BaseModel):
-    """Модель данных для передачи темы в запросе."""
+    """
+    Модель запроса для генерации поста.
+    """
     topic: str
 
 def get_recent_news(topic: str) -> str:
     """
-    Получает свежие новости по теме с помощью Currents API.
-    Возвращает заголовки 5 новостей (или сообщение об отсутствии).
+    Получает свежие новости по теме через Currents API.
+    Возвращает заголовки 5 новостей или сообщение об отсутствии новостей.
     """
     url = "https://api.currentsapi.services/v1/latest-news"
     params = {
@@ -48,22 +51,21 @@ def get_recent_news(topic: str) -> str:
             return "Свежих новостей не найдено."
         return "\n".join([article["title"] for article in news_data[:5]])
     except requests.RequestException as e:
-        # Логируем ошибку (можно расширить логирование)
         raise HTTPException(status_code=502, detail=f"Ошибка запроса к Currents API: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при обработке новостей: {str(e)}")
 
 def generate_content(topic: str) -> Dict[str, str]:
     """
-    Генерирует заголовок, мета-описание и статью по теме с помощью OpenAI API.
-    Использует новости как контекст.
+    Генерирует заголовок, мета-описание и статью по теме с помощью OpenAI.
+    Использует последние новости как контекст.
     """
     recent_news = get_recent_news(topic)
 
     try:
         # Генерируем заголовок
-        title_response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+        title_response = client.chat.completions.create(
+            model="gpt-4o",
             messages=[{
                 "role": "user",
                 "content": f"Придумайте привлекательный и точный заголовок для статьи на тему '{topic}', с учётом актуальных новостей:\n{recent_news}."
@@ -75,8 +77,8 @@ def generate_content(topic: str) -> Dict[str, str]:
         title = title_response.choices[0].message.content.strip()
 
         # Генерируем мета-описание
-        meta_response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+        meta_response = client.chat.completions.create(
+            model="gpt-4o",
             messages=[{
                 "role": "user",
                 "content": f"Напишите мета-описание для статьи с заголовком: '{title}'. Оно должно быть полным, информативным и содержать основные ключевые слова."
@@ -87,9 +89,9 @@ def generate_content(topic: str) -> Dict[str, str]:
         )
         meta_description = meta_response.choices[0].message.content.strip()
 
-        # Генерируем основное содержимое статьи
-        post_response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+        # Генерируем содержимое статьи
+        post_response = client.chat.completions.create(
+            model="gpt-4o",
             messages=[{
                 "role": "user",
                 "content": (
@@ -118,33 +120,31 @@ def generate_content(topic: str) -> Dict[str, str]:
             "post_content": post_content
         }
     except Exception as e:
-        # Если произошла ошибка при генерации
         raise HTTPException(status_code=500, detail=f"Ошибка генерации текста: {str(e)}")
 
 @app.post("/generate-post")
 async def generate_post_api(topic: Topic):
     """
-    Эндпоинт для генерации блог-поста по заданной теме.
+    Эндпоинт для генерации блог-поста по теме.
     """
     return generate_content(topic.topic)
 
 @app.get("/")
 async def root():
     """
-    Корневой эндпоинт для проверки статуса сервиса.
+    Корневой эндпоинт для проверки работоспособности сервиса.
     """
     return {"message": "Сервис работает"}
 
 @app.get("/heartbeat")
 async def heartbeat_api():
     """
-    Эндпоинт для проверки "живости" сервиса.
+    Эндпоинт для проверки состояния сервиса.
     """
     return {"status": "OK"}
 
 if __name__ == "__main__":
     import uvicorn
-    # Запуск сервера на всех интерфейсах (порт можно задать переменной окружения PORT)
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8080))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
 
